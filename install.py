@@ -200,6 +200,15 @@ def create_env_file(environment: str) -> DatabaseConfig | None:
     custom_secret = get_input("Use custom secret key? (leave empty to use generated)", "")
     if custom_secret:
         secret_key = custom_secret
+
+    # Refresh Token
+    print(f"\n{Colors.BOLD}Refresh Token:{Colors.ENDC}")
+    refresh_secret = secrets.token_urlsafe(32)
+    print_info(f"Generated refresh secret: {refresh_secret[:20]}...")
+    custom_refresh = get_input("Use custom refresh secret? (leave empty to use generated)", "")
+    if custom_refresh:
+        refresh_secret = custom_refresh
+    refresh_expiry = get_input("Refresh token expiry (minutes)", "43200")
     
     jwt_algorithm = get_input("JWT algorithm", "HS256")
     jwt_expiration = get_input("JWT expiration (hours)", "24")
@@ -274,6 +283,10 @@ DATABASE_URL={db_config.url}
 SECRET_KEY={secret_key}
 JWT_ALGORITHM={jwt_algorithm}
 JWT_EXPIRATION_HOURS={jwt_expiration}
+
+# Refresh Token
+REFRESH_SECRET_KEY={refresh_secret}
+REFRESH_TOKEN_EXPIRE_MINUTES={refresh_expiry}
 
 # CORS
 ALLOWED_ORIGINS={allowed_origins}
