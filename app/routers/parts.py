@@ -9,7 +9,7 @@ from sqlalchemy import and_, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
-from app.core.deps import CurrentUser
+from app.core.deps import CurrentUser, require_permission
 from app.models import Part, PartMovement
 from app.schemas import (
     PaginatedResponse,

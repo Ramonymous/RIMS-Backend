@@ -10,7 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.core.database import get_db
-from app.core.deps import CurrentUser
+from app.core.deps import CurrentUser, require_permission
 from app.models import Part, PartMovement, Receiving, ReceivingItem
 from app.schemas import (
     DocumentStatus,
