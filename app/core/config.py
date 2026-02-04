@@ -54,7 +54,8 @@ class Settings(BaseSettings):
     api_domain: str = "api.r-dev.asia"
     frontend_domain: str = "rims.r-dev.asia"
     
-    # Timezone
+    REFRESH_SECRET_KEY: str = os.getenv("REFRESH_SECRET_KEY", "refresh_secret")
+    REFRESH_TOKEN_EXPIRE_MINUTES: int = int(os.getenv("REFRESH_TOKEN_EXPIRE_MINUTES", 43200))
     timezone: str = "Asia/Jakarta"
     
     # Rate Limiting

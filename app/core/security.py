@@ -43,3 +43,23 @@ def verify_token(token: str) -> str | None:
         return user_id
     except JWTError:
         return None
+
+
+# Refresh token config
+REFRESH_SECRET_KEY = getattr(settings, "REFRESH_SECRET_KEY", "refresh_secret")
+REFRESH_TOKEN_EXPIRE_MINUTES = getattr(settings, "REFRESH_TOKEN_EXPIRE_MINUTES", 43200)
+
+def create_refresh_token(subject: str) -> str:
+    expire = datetime.now(timezone.utc) + timedelta(minutes=REFRESH_TOKEN_EXPIRE_MINUTES)
+    payload: dict[str, Any] = {"sub": subject, "exp": expire}
+    return jwt.encode(payload, REFRESH_SECRET_KEY, algorithm="HS256")
+
+def verify_refresh_token(token: str) -> str | None:
+    try:
+        payload = jwt.decode(token, REFRESH_SECRET_KEY, algorithms=["HS256"])
+        user_id: str | None = payload.get("sub")
+        if user_id is None:
+            return None
+        return user_id
+    except JWTError:
+        return None

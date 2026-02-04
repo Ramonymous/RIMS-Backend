@@ -175,8 +175,15 @@ if settings.rate_limit_enabled:
 # CUSTOM MIDDLEWARE
 # ============================================================================
 
+from fastapi import Response
+
+from typing import Callable, Awaitable
+
 @app.middleware("http")
-async def cloudflare_middleware(request: Request, call_next):
+async def cloudflare_middleware(
+    request: Request, 
+    call_next: Callable[[Request], Awaitable[Response]]
+) -> Response:
     """
     Extract real client IP and Cloudflare metadata.
     Validate requests are from Cloudflare in production.
@@ -332,9 +339,12 @@ async def health_check(request: Request) -> dict[str, Any]:
         }
     except Exception as e:
         logger.error(f"Health check failed: {e}")
-        return JSONResponse(
+        # Set status code via response_class, but return a dict
+        # FastAPI will serialize and set status code if you raise HTTPException
+        from fastapi import HTTPException
+        raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            content={
+            detail={
                 "status": "unhealthy",
                 "database": "disconnected",
                 "error": str(e) if settings.debug else "Database connection failed",
@@ -349,9 +359,10 @@ async def server_info(request: Request) -> dict[str, Any]:
     Useful for debugging Cloudflare setup and IP forwarding.
     """
     if not settings.is_development:
-        return JSONResponse(
+        from fastapi import HTTPException
+        raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            content={"error": "This endpoint is only available in development mode"},
+            detail="This endpoint is only available in development mode",
         )
     
     return {
