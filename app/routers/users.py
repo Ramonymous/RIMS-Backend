@@ -19,7 +19,7 @@ router = APIRouter(prefix="/users", tags=["users"])
 DB = Annotated[AsyncSession, Depends(get_db)]
 
 
-@router.get("", response_model=PaginatedResponse[UserResponse])
+@router.get("", response_model=PaginatedResponse[UserResponse], dependencies=[Depends(require_permission("users.view"))])
 async def list_users(
     db: DB,
     current_user: CurrentUser,
@@ -45,13 +45,13 @@ async def list_users(
     )
 
 
-@router.get("/me", response_model=UserResponse)
+@router.get("/me", response_model=UserResponse, dependencies=[Depends(require_permission("users.view"))])
 async def get_current_user_info(current_user: CurrentUser) -> UserResponse:
     """Get current authenticated user."""
     return UserResponse.model_validate(current_user)
 
 
-@router.get("/{user_id}", response_model=UserResponse)
+@router.get("/{user_id}", response_model=UserResponse, dependencies=[Depends(require_permission("users.view"))])
 async def get_user(
     user_id: UUID,
     db: DB,
@@ -72,7 +72,7 @@ async def get_user(
     "",
     response_model=UserResponse,
     status_code=status.HTTP_201_CREATED,
-    dependencies=[Depends(require_permission("manage_users"))],
+    dependencies=[Depends(require_permission("users.update"))],
 )
 async def create_user(request: UserCreate, db: DB) -> UserResponse:
     """Create a new user. Requires manage_users permission."""
@@ -100,7 +100,7 @@ async def create_user(request: UserCreate, db: DB) -> UserResponse:
 @router.put(
     "/{user_id}",
     response_model=UserResponse,
-    dependencies=[Depends(require_permission("manage_users"))],
+    dependencies=[Depends(require_permission("users.update"))],
 )
 async def update_user(
     user_id: UUID,
@@ -139,7 +139,7 @@ async def update_user(
 @router.delete(
     "/{user_id}",
     status_code=status.HTTP_204_NO_CONTENT,
-    dependencies=[Depends(require_permission("manage_users"))],
+    dependencies=[Depends(require_permission("users.update"))],
 )
 async def delete_user(user_id: UUID, db: DB, current_user: CurrentUser) -> None:
     """Delete a user. Requires manage_users permission."""

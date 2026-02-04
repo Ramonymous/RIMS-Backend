@@ -6,6 +6,8 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import and_, func, select
+from datetime import datetime
+import uuid
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -47,6 +49,9 @@ async def list_requests(
     status_filter: DocumentStatus | None = Query(default=None),
     request_number: str | None = Query(default=None),
 ) -> PaginatedResponse[RequestResponse]:
+    # Permission: requests.view
+    if not current_user.has_permission("requests.view"):
+        raise HTTPException(status_code=403, detail="Permission denied: requests.view")
     """
     List all requests with optional filtering and pagination.
     
@@ -93,6 +98,9 @@ async def get_request(
     db: DB,
     current_user: CurrentUser,
 ) -> RequestResponse:
+    # Permission: requests.view
+    if not current_user.has_permission("requests.view"):
+        raise HTTPException(status_code=403, detail="Permission denied: requests.view")
     """Get request with nested items."""
     stmt = (
         select(Request)
@@ -116,6 +124,9 @@ async def create_request(
     db: DB,
     current_user: CurrentUser,
 ) -> RequestResponse:
+    # Permission: requests.create
+    if not current_user.has_permission("requests.create"):
+        raise HTTPException(status_code=403, detail="Permission denied: requests.create")
     """Create a new request in draft status."""
     request_obj = Request(
         request_number=request.request_number,
@@ -155,6 +166,9 @@ async def update_request(
     db: DB,
     current_user: CurrentUser,
 ) -> RequestResponse:
+    # Permission: requests.update
+    if not current_user.has_permission("requests.update"):
+        raise HTTPException(status_code=403, detail="Permission denied: requests.update")
     """Update a request."""
     stmt = (
         select(Request)
@@ -205,6 +219,9 @@ async def delete_request(
     db: DB,
     current_user: CurrentUser,
 ) -> None:
+    # Permission: requests.delete
+    if not current_user.has_permission("requests.delete"):
+        raise HTTPException(status_code=403, detail="Permission denied: requests.delete")
     """Soft-delete a request."""
     stmt = select(Request).where(
         and_(Request.id == request_id, Request.deleted_at.is_(None))
@@ -227,6 +244,9 @@ async def complete_request(
     db: DB,
     current_user: CurrentUser,
 ) -> RequestResponse:
+    # Permission: requests.complete
+    if not current_user.has_permission("requests.complete"):
+        raise HTTPException(status_code=403, detail="Permission denied: requests.complete")
     """Complete a request (transitions status → completed)."""
     stmt = (
         select(Request)
@@ -300,6 +320,9 @@ async def cancel_request(
     db: DB,
     current_user: CurrentUser,
 ) -> RequestResponse:
+    # Permission: requests.cancel
+    if not current_user.has_permission("requests.cancel"):
+        raise HTTPException(status_code=403, detail="Permission denied: requests.cancel")
     """Cancel a request (transitions status → cancelled)."""
     stmt = (
         select(Request)
@@ -333,6 +356,9 @@ async def supply_request_item(
     current_user: CurrentUser,
     qty: int | None = Query(default=None, ge=1, description="Quantity to supply (optional, defaults to requested qty)"),
 ) -> RequestResponse:
+    # Permission: requests.supply
+    if not current_user.has_permission("requests.supply"):
+        raise HTTPException(status_code=403, detail="Permission denied: requests.supply")
     """Mark a request item as supplied and broadcast the event.
     
     Optionally accepts a qty parameter to record the actual supplied quantity,
@@ -359,10 +385,90 @@ async def supply_request_item(
     part_result = await db.execute(part_stmt)
     part = part_result.scalar_one_or_none()
 
+    # Tentukan qty yang akan disupply
+    supply_qty = qty if qty is not None else item.qty
+    if supply_qty <= 0:
+        raise HTTPException(status_code=400, detail="Supply quantity must be greater than 0")
+
+    # Lock part row for update (to prevent race condition)
+    part_stmt = select(Part).where(Part.id == item.part_id).with_for_update()
+    part_result = await db.execute(part_stmt)
+    part = part_result.scalar_one_or_none()
+    if not part:
+        raise HTTPException(status_code=404, detail="Part not found")
+    if part.stock < supply_qty:
+        raise HTTPException(status_code=400, detail=f"Not enough stock. Available: {part.stock}")
+
+    # Kurangi stok part
+    stock_before = part.stock
+    part.stock -= supply_qty
+    stock_after = part.stock
+
     # Mark as supplied, update qty if provided
     item.is_supplied = True
-    if qty is not None:
-        item.qty = qty  # Update to actual supplied quantity
+    item.qty = supply_qty
+
+    # --- Outgoing logic ---
+    from app.models import Outgoing, OutgoingItem
+    # Cek apakah sudah ada Outgoing untuk request ini (status draft/active)
+    outgoing_stmt = select(Outgoing).where(
+        Outgoing.notes == str(item.request_id),
+        Outgoing.status == "draft"
+    )
+    outgoing_result = await db.execute(outgoing_stmt)
+    outgoing = outgoing_result.scalar_one_or_none()
+    if not outgoing:
+        # Buat Outgoing baru dengan doc_number konsisten (OUT-DDMMYY-XXXX)
+        today = datetime.now().strftime('%d%m%y')
+        # Cari nomor urut terakhir hari ini
+        from app.models import Outgoing
+        last_out_stmt = select(Outgoing).where(
+            Outgoing.doc_number.like(f"OUT-{today}-%")
+        ).order_by(Outgoing.doc_number.desc())
+        last_out_result = await db.execute(last_out_stmt)
+        last_out = last_out_result.scalars().first()
+        if last_out and last_out.doc_number:
+            try:
+                last_seq = int(last_out.doc_number.split('-')[-1])
+            except Exception:
+                last_seq = 0
+        else:
+            last_seq = 0
+        new_seq = last_seq + 1
+        doc_number = f"OUT-{today}-{new_seq:04d}"
+        outgoing = Outgoing(
+            id=uuid.uuid4(),
+            doc_number=doc_number,
+            issued_by=current_user.id,
+            issued_at=datetime.now(),
+            status="draft",
+            notes=str(item.request_id)
+        )
+        db.add(outgoing)
+        await db.flush()
+
+    # Tambahkan OutgoingItem
+    outgoing_item = OutgoingItem(
+        id=uuid.uuid4(),  # type: ignore
+        outgoing_id=outgoing.id,
+        part_id=part.id,
+        qty=supply_qty
+    )
+    db.add(outgoing_item)
+
+    # --- PartMovement logic ---
+    from app.models import PartMovement
+    movement = PartMovement(
+        part_id=part.id,
+        stock_before=stock_before,
+        type="out",
+        qty=supply_qty,
+        stock_after=stock_after,
+        reference_type="Outgoings",
+        reference_id=outgoing.id
+    )
+    db.add(movement)
+
     await db.commit()
 
     # Broadcast the supply event

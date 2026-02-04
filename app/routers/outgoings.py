@@ -10,7 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.core.database import get_db
-from app.core.deps import CurrentUser
+from app.core.deps import CurrentUser, require_permission
 from app.models import Outgoing, OutgoingItem, Part, PartMovement
 from app.schemas import (
     DocumentStatus,
@@ -26,7 +26,7 @@ router = APIRouter(prefix="/outgoings", tags=["outgoings"])
 DB = Annotated[AsyncSession, Depends(get_db)]
 
 
-@router.get("", response_model=PaginatedResponse[OutgoingResponse])
+@router.get("", response_model=PaginatedResponse[OutgoingResponse], dependencies=[Depends(require_permission("outgoings.view"))])
 async def list_outgoings(
     db: DB,
     current_user: CurrentUser,
@@ -82,7 +82,7 @@ async def list_outgoings(
     )
 
 
-@router.get("/{outgoing_id}", response_model=OutgoingResponse)
+@router.get("/{outgoing_id}", response_model=OutgoingResponse, dependencies=[Depends(require_permission("outgoings.view"))])
 async def get_outgoing(
     outgoing_id: UUID,
     db: DB,
@@ -105,7 +105,7 @@ async def get_outgoing(
     return OutgoingResponse.model_validate(outgoing)
 
 
-@router.post("", response_model=OutgoingResponse, status_code=status.HTTP_201_CREATED)
+@router.post("", response_model=OutgoingResponse, status_code=status.HTTP_201_CREATED, dependencies=[Depends(require_permission("outgoings.create"))])
 async def create_outgoing(
     request: OutgoingCreate,
     db: DB,
@@ -138,7 +138,7 @@ async def create_outgoing(
     return OutgoingResponse.model_validate(result.scalar_one())
 
 
-@router.put("/{outgoing_id}", response_model=OutgoingResponse)
+@router.put("/{outgoing_id}", response_model=OutgoingResponse, dependencies=[Depends(require_permission("outgoings.update"))])
 async def update_outgoing(
     outgoing_id: UUID,
     request: OutgoingUpdate,
@@ -189,7 +189,7 @@ async def update_outgoing(
     return OutgoingResponse.model_validate(result.scalar_one())
 
 
-@router.delete("/{outgoing_id}", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete("/{outgoing_id}", status_code=status.HTTP_204_NO_CONTENT, dependencies=[Depends(require_permission("outgoings.delete"))])
 async def delete_outgoing(
     outgoing_id: UUID,
     db: DB,
@@ -211,7 +211,7 @@ async def delete_outgoing(
     await db.commit()
 
 
-@router.put("/{outgoing_id}/complete", response_model=OutgoingResponse)
+@router.put("/{outgoing_id}/complete", response_model=OutgoingResponse, dependencies=[Depends(require_permission("outgoings.complete"))])
 async def complete_outgoing(
     outgoing_id: UUID,
     db: DB,
@@ -285,7 +285,7 @@ async def complete_outgoing(
     return OutgoingResponse.model_validate(result.scalar_one())
 
 
-@router.put("/{outgoing_id}/cancel", response_model=OutgoingResponse)
+@router.put("/{outgoing_id}/cancel", response_model=OutgoingResponse, dependencies=[Depends(require_permission("outgoings.cancel"))])
 async def cancel_outgoing(
     outgoing_id: UUID,
     db: DB,
@@ -317,7 +317,7 @@ async def cancel_outgoing(
     return OutgoingResponse.model_validate(result.scalar_one())
 
 
-@router.put("/{outgoing_id}/confirm-gi", response_model=OutgoingResponse)
+@router.put("/{outgoing_id}/confirm-gi", response_model=OutgoingResponse, dependencies=[Depends(require_permission("outgoings.confirm_gi"))])
 async def confirm_gi(
     outgoing_id: UUID,
     db: DB,

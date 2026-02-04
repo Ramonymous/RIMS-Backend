@@ -26,7 +26,7 @@ router = APIRouter(prefix="/parts", tags=["parts"])
 DB = Annotated[AsyncSession, Depends(get_db)]
 
 
-@router.get("", response_model=PaginatedResponse[PartResponse])
+@router.get("", response_model=PaginatedResponse[PartResponse], dependencies=[Depends(require_permission("parts.view"))])
 async def list_parts(
     db: DB,
     current_user: CurrentUser,
@@ -83,7 +83,7 @@ async def list_parts(
     )
 
 
-@router.get("/{part_id}", response_model=PartResponse)
+@router.get("/{part_id}", response_model=PartResponse, dependencies=[Depends(require_permission("parts.view"))])
 async def get_part(
     part_id: UUID,
     db: DB,
@@ -100,7 +100,7 @@ async def get_part(
     return PartResponse.model_validate(part)
 
 
-@router.post("", response_model=PartResponse, status_code=status.HTTP_201_CREATED)
+@router.post("", response_model=PartResponse, status_code=status.HTTP_201_CREATED, dependencies=[Depends(require_permission("parts.create"))])
 async def create_part(
     request: PartCreate,
     db: DB,
@@ -114,7 +114,7 @@ async def create_part(
     return PartResponse.model_validate(part)
 
 
-@router.put("/{part_id}", response_model=PartResponse)
+@router.put("/{part_id}", response_model=PartResponse, dependencies=[Depends(require_permission("parts.update"))])
 async def update_part(
     part_id: UUID,
     request: PartUpdate,
@@ -139,7 +139,7 @@ async def update_part(
     return PartResponse.model_validate(part)
 
 
-@router.delete("/{part_id}", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete("/{part_id}", status_code=status.HTTP_204_NO_CONTENT, dependencies=[Depends(require_permission("parts.delete"))])
 async def delete_part(
     part_id: UUID,
     db: DB,
@@ -157,7 +157,7 @@ async def delete_part(
     await db.commit()
 
 
-@router.get("/{part_id}/movements", response_model=PaginatedResponse[PartMovementResponse])
+@router.get("/{part_id}/movements", response_model=PaginatedResponse[PartMovementResponse], dependencies=[Depends(require_permission("parts.view"))])
 async def get_part_movements(
     part_id: UUID,
     db: DB,

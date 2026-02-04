@@ -26,7 +26,7 @@ router = APIRouter(prefix="/receivings", tags=["receivings"])
 DB = Annotated[AsyncSession, Depends(get_db)]
 
 
-@router.get("", response_model=PaginatedResponse[ReceivingResponse])
+@router.get("", response_model=PaginatedResponse[ReceivingResponse], dependencies=[Depends(require_permission("receivings.view"))])
 async def list_receivings(
     db: DB,
     current_user: CurrentUser,
@@ -82,7 +82,7 @@ async def list_receivings(
     )
 
 
-@router.get("/{receiving_id}", response_model=ReceivingResponse)
+@router.get("/{receiving_id}", response_model=ReceivingResponse, dependencies=[Depends(require_permission("receivings.view"))])
 async def get_receiving(
     receiving_id: UUID,
     db: DB,
@@ -105,7 +105,7 @@ async def get_receiving(
     return ReceivingResponse.model_validate(receiving)
 
 
-@router.post("", response_model=ReceivingResponse, status_code=status.HTTP_201_CREATED)
+@router.post("", response_model=ReceivingResponse, status_code=status.HTTP_201_CREATED, dependencies=[Depends(require_permission("receivings.create"))])
 async def create_receiving(
     request: ReceivingCreate,
     db: DB,
@@ -138,7 +138,7 @@ async def create_receiving(
     return ReceivingResponse.model_validate(result.scalar_one())
 
 
-@router.put("/{receiving_id}", response_model=ReceivingResponse)
+@router.put("/{receiving_id}", response_model=ReceivingResponse, dependencies=[Depends(require_permission("receivings.update"))])
 async def update_receiving(
     receiving_id: UUID,
     request: ReceivingUpdate,
@@ -189,7 +189,7 @@ async def update_receiving(
     return ReceivingResponse.model_validate(result.scalar_one())
 
 
-@router.delete("/{receiving_id}", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete("/{receiving_id}", status_code=status.HTTP_204_NO_CONTENT, dependencies=[Depends(require_permission("receivings.delete"))])
 async def delete_receiving(
     receiving_id: UUID,
     db: DB,
@@ -211,7 +211,7 @@ async def delete_receiving(
     await db.commit()
 
 
-@router.put("/{receiving_id}/complete", response_model=ReceivingResponse)
+@router.put("/{receiving_id}/complete", response_model=ReceivingResponse, dependencies=[Depends(require_permission("receivings.complete"))])
 async def complete_receiving(
     receiving_id: UUID,
     db: DB,
@@ -276,7 +276,7 @@ async def complete_receiving(
     return ReceivingResponse.model_validate(result.scalar_one())
 
 
-@router.put("/{receiving_id}/cancel", response_model=ReceivingResponse)
+@router.put("/{receiving_id}/cancel", response_model=ReceivingResponse, dependencies=[Depends(require_permission("receivings.cancel"))])
 async def cancel_receiving(
     receiving_id: UUID,
     db: DB,
@@ -308,7 +308,7 @@ async def cancel_receiving(
     return ReceivingResponse.model_validate(result.scalar_one())
 
 
-@router.put("/{receiving_id}/confirm-gr", response_model=ReceivingResponse)
+@router.put("/{receiving_id}/confirm-gr", response_model=ReceivingResponse, dependencies=[Depends(require_permission("receivings.confirm_gr"))])
 async def confirm_gr(
     receiving_id: UUID,
     db: DB,
