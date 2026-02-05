@@ -1,28 +1,30 @@
 """Parts request management routes."""
 
+import uuid
 from datetime import datetime, timezone
 from typing import Annotated, Any, TypedDict
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import and_, func, select
-from datetime import datetime
-import uuid
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.core.database import get_db
 from app.core.deps import CurrentUser
 from app.core.events import broadcaster
-from app.models import Part, Request, RequestList
+from app.models import Part, Request, RequestList, Outgoing, OutgoingItem, PartMovement
 from app.schemas import (
     DocumentStatus,
     PaginatedResponse,
     RequestCreate,
     RequestResponse,
     RequestUpdate,
+    RequestListResponse,
 )
 
+# Type alias for database dependency
+DB = Annotated[AsyncSession, Depends(get_db)]
 
 class ItemDataDict(TypedDict):
     """Type definition for item broadcast data."""
@@ -33,11 +35,35 @@ class ItemDataDict(TypedDict):
     is_supplied: bool
     request: dict[str, Any]
 
-
 router = APIRouter(prefix="/requests", tags=["requests"])
 
-# Type alias for database dependency
-DB = Annotated[AsyncSession, Depends(get_db)]
+
+# --- New: Pick/Check a request item ---
+@router.post("/pick/{item_id}", response_model=RequestListResponse)
+async def pick_request_item(
+    item_id: UUID,
+    db: DB,
+    current_user: CurrentUser,
+):
+    """Trigger a location check for a request item (e.g., lighting up an LED)."""
+    # Permission: checks.locations
+    if not current_user.has_permission("checks.locations"):
+        raise HTTPException(status_code=403, detail="Permission denied: checks.locations")
+
+    # Find the request item with part information
+    stmt = (
+        select(RequestList)
+        .where(RequestList.id == item_id)
+    )
+    result = await db.execute(stmt)
+    item = result.scalar_one_or_none()
+    
+    if not item:
+        raise HTTPException(status_code=404, detail="Request item not found")
+
+    # Di sini biasanya ada logika untuk berkomunikasi dengan hardware/IoT
+    # Untuk sekarang kita hanya mengembalikan status sukses
+    return RequestListResponse.model_validate(item)
 
 
 @router.get("", response_model=PaginatedResponse[RequestResponse])
@@ -49,18 +75,12 @@ async def list_requests(
     status_filter: DocumentStatus | None = Query(default=None),
     request_number: str | None = Query(default=None),
 ) -> PaginatedResponse[RequestResponse]:
+    """List all requests with optional filtering and pagination."""
     # Permission: requests.view
     if not current_user.has_permission("requests.view"):
         raise HTTPException(status_code=403, detail="Permission denied: requests.view")
-    """
-    List all requests with optional filtering and pagination.
     
-    status_filter options: draft, completed, cancelled
-    """
-    base_query = (
-        select(Request)
-        .where(Request.deleted_at.is_(None))
-    )
+    base_query = select(Request).where(Request.deleted_at.is_(None))
 
     if status_filter:
         base_query = base_query.where(Request.status == status_filter.value)
@@ -98,10 +118,11 @@ async def get_request(
     db: DB,
     current_user: CurrentUser,
 ) -> RequestResponse:
+    """Get request with nested items."""
     # Permission: requests.view
     if not current_user.has_permission("requests.view"):
         raise HTTPException(status_code=403, detail="Permission denied: requests.view")
-    """Get request with nested items."""
+    
     stmt = (
         select(Request)
         .where(and_(Request.id == request_id, Request.deleted_at.is_(None)))
@@ -111,9 +132,7 @@ async def get_request(
     request_obj = result.scalar_one_or_none()
 
     if not request_obj:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="Request not found"
-        )
+        raise HTTPException(status_code=404, detail="Request not found")
 
     return RequestResponse.model_validate(request_obj)
 
@@ -124,10 +143,11 @@ async def create_request(
     db: DB,
     current_user: CurrentUser,
 ) -> RequestResponse:
+    """Create a new request in draft status."""
     # Permission: requests.create
     if not current_user.has_permission("requests.create"):
         raise HTTPException(status_code=403, detail="Permission denied: requests.create")
-    """Create a new request in draft status."""
+    
     request_obj = Request(
         request_number=request.request_number,
         requested_by=request.requested_by,
@@ -166,10 +186,11 @@ async def update_request(
     db: DB,
     current_user: CurrentUser,
 ) -> RequestResponse:
+    """Update a request."""
     # Permission: requests.update
     if not current_user.has_permission("requests.update"):
         raise HTTPException(status_code=403, detail="Permission denied: requests.update")
-    """Update a request."""
+    
     stmt = (
         select(Request)
         .where(and_(Request.id == request_id, Request.deleted_at.is_(None)))
@@ -179,9 +200,7 @@ async def update_request(
     request_obj = result.scalar_one_or_none()
 
     if not request_obj:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="Request not found"
-        )
+        raise HTTPException(status_code=404, detail="Request not found")
 
     # Update scalar fields
     if request.request_number is not None:
@@ -204,6 +223,7 @@ async def update_request(
 
     await db.commit()
     
+    # Refresh to get updated data
     stmt = (
         select(Request)
         .where(Request.id == request_obj.id)
@@ -219,10 +239,11 @@ async def delete_request(
     db: DB,
     current_user: CurrentUser,
 ) -> None:
+    """Soft-delete a request."""
     # Permission: requests.delete
     if not current_user.has_permission("requests.delete"):
         raise HTTPException(status_code=403, detail="Permission denied: requests.delete")
-    """Soft-delete a request."""
+    
     stmt = select(Request).where(
         and_(Request.id == request_id, Request.deleted_at.is_(None))
     )
@@ -230,9 +251,7 @@ async def delete_request(
     request_obj = result.scalar_one_or_none()
 
     if not request_obj:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="Request not found"
-        )
+        raise HTTPException(status_code=404, detail="Request not found")
 
     request_obj.deleted_at = datetime.now(timezone.utc)
     await db.commit()
@@ -244,10 +263,11 @@ async def complete_request(
     db: DB,
     current_user: CurrentUser,
 ) -> RequestResponse:
+    """Complete a request (transitions status → completed)."""
     # Permission: requests.complete
     if not current_user.has_permission("requests.complete"):
         raise HTTPException(status_code=403, detail="Permission denied: requests.complete")
-    """Complete a request (transitions status → completed)."""
+    
     stmt = (
         select(Request)
         .where(and_(Request.id == request_id, Request.deleted_at.is_(None)))
@@ -257,9 +277,7 @@ async def complete_request(
     request_obj = result.scalar_one_or_none()
 
     if not request_obj:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="Request not found"
-        )
+        raise HTTPException(status_code=404, detail="Request not found")
 
     if request_obj.status != DocumentStatus.DRAFT.value:
         raise HTTPException(
@@ -309,7 +327,7 @@ async def complete_request(
                         "requested_at": request_obj.requested_at.isoformat(),
                     },
                 }
-                await broadcaster.broadcast_request_item_created(item_data)  # type: ignore[arg-type]
+                await broadcaster.broadcast_request_item_created(item_data)  # type: ignore
     
     return RequestResponse.model_validate(request_obj)
 
@@ -320,10 +338,11 @@ async def cancel_request(
     db: DB,
     current_user: CurrentUser,
 ) -> RequestResponse:
+    """Cancel a request (transitions status → cancelled)."""
     # Permission: requests.cancel
     if not current_user.has_permission("requests.cancel"):
         raise HTTPException(status_code=403, detail="Permission denied: requests.cancel")
-    """Cancel a request (transitions status → cancelled)."""
+    
     stmt = (
         select(Request)
         .where(and_(Request.id == request_id, Request.deleted_at.is_(None)))
@@ -333,9 +352,7 @@ async def cancel_request(
     request_obj = result.scalar_one_or_none()
 
     if not request_obj:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="Request not found"
-        )
+        raise HTTPException(status_code=404, detail="Request not found")
 
     request_obj.status = DocumentStatus.CANCELLED.value
     await db.commit()
@@ -354,86 +371,68 @@ async def supply_request_item(
     item_id: UUID,
     db: DB,
     current_user: CurrentUser,
-    qty: int | None = Query(default=None, ge=1, description="Quantity to supply (optional, defaults to requested qty)"),
+    qty: int | None = Query(default=None, ge=1, description="Quantity to supply"),
 ) -> RequestResponse:
+    """Mark a request item as supplied and record outgoing movement."""
     # Permission: requests.supply
     if not current_user.has_permission("requests.supply"):
         raise HTTPException(status_code=403, detail="Permission denied: requests.supply")
-    """Mark a request item as supplied and broadcast the event.
-    
-    Optionally accepts a qty parameter to record the actual supplied quantity,
-    which can differ from the originally requested quantity.
-    """
-    # Find the item with part eager loaded
+
+    # Find the item
     stmt = select(RequestList).where(RequestList.id == item_id)
     result = await db.execute(stmt)
     item = result.scalar_one_or_none()
 
     if not item:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="Request item not found"
-        )
+        raise HTTPException(status_code=404, detail="Request item not found")
 
     if item.is_supplied:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="Item is already supplied",
-        )
+        raise HTTPException(status_code=409, detail="Item is already supplied")
 
-    # Get the part for broadcast
-    part_stmt = select(Part).where(Part.id == item.part_id)
-    part_result = await db.execute(part_stmt)
-    part = part_result.scalar_one_or_none()
-
-    # Tentukan qty yang akan disupply
+    # Determine supply qty
     supply_qty = qty if qty is not None else item.qty
-    if supply_qty <= 0:
-        raise HTTPException(status_code=400, detail="Supply quantity must be greater than 0")
 
-    # Lock part row for update (to prevent race condition)
+    # Lock part row for update
     part_stmt = select(Part).where(Part.id == item.part_id).with_for_update()
     part_result = await db.execute(part_stmt)
     part = part_result.scalar_one_or_none()
+
     if not part:
         raise HTTPException(status_code=404, detail="Part not found")
     if part.stock < supply_qty:
         raise HTTPException(status_code=400, detail=f"Not enough stock. Available: {part.stock}")
 
-    # Kurangi stok part
+    # Process stock reduction
     stock_before = part.stock
     part.stock -= supply_qty
     stock_after = part.stock
 
-    # Mark as supplied, update qty if provided
+    # Mark item as supplied
     item.is_supplied = True
     item.qty = supply_qty
 
     # --- Outgoing logic ---
-    from app.models import Outgoing, OutgoingItem
-    # Cek apakah sudah ada Outgoing untuk request ini (status draft/active)
     outgoing_stmt = select(Outgoing).where(
-        Outgoing.notes == str(item.request_id),
-        Outgoing.status == "draft"
+        and_(Outgoing.notes == str(item.request_id), Outgoing.status == "draft")
     )
     outgoing_result = await db.execute(outgoing_stmt)
     outgoing = outgoing_result.scalar_one_or_none()
+
     if not outgoing:
-        # Buat Outgoing baru dengan doc_number konsisten (OUT-DDMMYY-XXXX)
         today = datetime.now().strftime('%d%m%y')
-        # Cari nomor urut terakhir hari ini
-        from app.models import Outgoing
         last_out_stmt = select(Outgoing).where(
             Outgoing.doc_number.like(f"OUT-{today}-%")
         ).order_by(Outgoing.doc_number.desc())
         last_out_result = await db.execute(last_out_stmt)
         last_out = last_out_result.scalars().first()
+        
+        last_seq = 0
         if last_out and last_out.doc_number:
             try:
                 last_seq = int(last_out.doc_number.split('-')[-1])
-            except Exception:
+            except (ValueError, IndexError):
                 last_seq = 0
-        else:
-            last_seq = 0
+        
         new_seq = last_seq + 1
         doc_number = f"OUT-{today}-{new_seq:04d}"
         outgoing = Outgoing(
@@ -447,17 +446,16 @@ async def supply_request_item(
         db.add(outgoing)
         await db.flush()
 
-    # Tambahkan OutgoingItem
+    # Create OutgoingItem
     outgoing_item = OutgoingItem(
-        id=uuid.uuid4(),  # type: ignore
+        id=uuid.uuid4(),
         outgoing_id=outgoing.id,
         part_id=part.id,
         qty=supply_qty
     )
     db.add(outgoing_item)
 
-    # --- PartMovement logic ---
-    from app.models import PartMovement
+    # Create PartMovement
     movement = PartMovement(
         part_id=part.id,
         stock_before=stock_before,
@@ -471,9 +469,8 @@ async def supply_request_item(
 
     await db.commit()
 
-    # Broadcast the supply event
-    if part:
-        await broadcaster.broadcast_request_item_supplied(str(item_id), part.part_number)
+    # Broadcast event
+    await broadcaster.broadcast_request_item_supplied(str(item_id), part.part_number)
 
     # Return the parent request
     request_stmt = (

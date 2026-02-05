@@ -558,6 +558,8 @@ async def create_admin_user() -> bool:
                 "requests.delete",
                 "requests.complete",
                 "requests.cancel",
+                "requests.supply",
+                "requests.locations",
             ]
 
             user = User(
