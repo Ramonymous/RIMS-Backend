@@ -1,6 +1,6 @@
 """Pydantic schemas for request/response validation."""
 
-from datetime import datetime, timezone
+from datetime import datetime
 from enum import Enum
 from typing import Any, Generic, TypeVar
 from uuid import UUID
@@ -163,6 +163,8 @@ class PartUpdate(BaseModel):
     address: str | None = Field(default=None, max_length=255)
     is_active: bool | None = None
 
+class PickRequest(BaseModel):
+    part_number: str
 
 class PartResponse(BaseModel):
     """Schema for part response."""

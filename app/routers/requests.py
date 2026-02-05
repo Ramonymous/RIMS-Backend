@@ -39,17 +39,24 @@ router = APIRouter(prefix="/requests", tags=["requests"])
 
 
 # --- New: Pick/Check a request item ---
-@router.post("/pick/{item_id}", response_model=RequestListResponse)
+
+from pydantic import BaseModel
+
+class PickRequestBody(BaseModel):
+    item_id: UUID
+
+@router.post("/pick", response_model=RequestListResponse)
 async def pick_request_item(
-    item_id: UUID,
+    body: PickRequestBody,
     db: DB,
     current_user: CurrentUser,
 ):
     """Trigger a location check for a request item (e.g., lighting up an LED)."""
-    # Permission: checks.locations
-    if not current_user.has_permission("checks.locations"):
-        raise HTTPException(status_code=403, detail="Permission denied: checks.locations")
+    # Permission: requests.locations
+    if not current_user.has_permission("requests.locations"):
+        raise HTTPException(status_code=403, detail="Permission denied: requests.locations")
 
+    item_id = body.item_id
     # Find the request item with part information
     stmt = (
         select(RequestList)
@@ -61,9 +68,27 @@ async def pick_request_item(
     if not item:
         raise HTTPException(status_code=404, detail="Request item not found")
 
+    # Fetch part details
+    part_stmt = select(Part).where(Part.id == item.part_id)
+    part_result = await db.execute(part_stmt)
+    part = part_result.scalar_one_or_none()
+
+    # Compose response with part details
+    item_dict = item.__dict__.copy()
+    if part:
+        item_dict['part'] = {
+            'id': str(part.id),
+            'part_number': part.part_number,
+            'part_name': part.part_name,
+            'stock': part.stock,
+            'address': part.address,
+        }
+    else:
+        item_dict['part'] = None
+
     # Di sini biasanya ada logika untuk berkomunikasi dengan hardware/IoT
     # Untuk sekarang kita hanya mengembalikan status sukses
-    return RequestListResponse.model_validate(item)
+    return RequestListResponse.model_validate(item_dict)
 
 
 @router.get("", response_model=PaginatedResponse[RequestResponse])
