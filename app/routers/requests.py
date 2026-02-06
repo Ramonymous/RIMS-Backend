@@ -465,7 +465,7 @@ async def supply_request_item(
             doc_number=doc_number,
             issued_by=current_user.id,
             issued_at=datetime.now(),
-            status="draft",
+            status="completed",
             notes=str(item.request_id)
         )
         db.add(outgoing)
