@@ -21,7 +21,10 @@ from app.schemas import (
     PickRequest,
     PartUpdate,
     StockStatusFilter,
-)
+    MovementSyncItem,
+    MovementSyncResponse,
+    PingResponse,
+    )
 
 # Setup logger
 logger = logging.getLogger(__name__)
@@ -40,34 +43,6 @@ QUEUE_KEY = "rims:pick_queue"
 
 # Google Sheets sync token (store in environment variables in production)
 GOOGLE_SHEETS_SYNC_TOKEN = "your-google-sheets-sync-token-here"
-
-
-# Custom response models for Google Sheets sync
-from pydantic import BaseModel
-
-
-class MovementSyncItem(BaseModel):
-    """Simplified movement data for Google Sheets sync."""
-    part_number: str
-    date: str  # YYYY-MM-DD format
-    time: str  # HH:MM:SS format
-    type: str  # IN or OUT
-    qty: int
-
-
-class MovementSyncResponse(BaseModel):
-    """Response model for Google Sheets sync."""
-    success: bool = True
-    data: List[MovementSyncItem]
-    total: int
-
-
-class PingResponse(BaseModel):
-    """Response model for ping endpoint."""
-    success: bool
-    message: str
-    timestamp: str
-
 
 @router.get("", response_model=PaginatedResponse[PartResponse], dependencies=[Depends(require_permission("parts.view"))])
 async def list_parts(

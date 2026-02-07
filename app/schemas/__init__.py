@@ -421,11 +421,6 @@ class PartMovementResponse(BaseModel):
     reference_id: UUID
     created_at: datetime
 
-class PingResponse(BaseModel):
-    success: bool
-    message: str
-    timestamp: str
-
 class MovementSyncItem(BaseModel):
     """Simplified movement data for Google Sheets sync."""
     part_number: str
@@ -441,6 +436,12 @@ class MovementSyncResponse(BaseModel):
     data: List[MovementSyncItem]
     total: int
 
+
+class PingResponse(BaseModel):
+    """Response model for ping endpoint."""
+    success: bool
+    message: str
+    timestamp: str
 
 # ============================================================================
 # AUTH SCHEMAS
