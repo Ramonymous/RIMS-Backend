@@ -1,7 +1,7 @@
 """Parts inventory management routes."""
 
-from datetime import datetime, timezone
-from typing import Annotated
+from datetime import datetime, timezone, date, time
+from typing import Annotated, List
 from uuid import UUID
 import redis.asyncio as redis
 import logging
@@ -21,6 +21,9 @@ from app.schemas import (
     PickRequest,
     PartUpdate,
     StockStatusFilter,
+    MovementSyncItem,
+    MovementSyncResponse,
+    PingResponse,
 )
 
 # Setup logger
@@ -31,13 +34,15 @@ router = APIRouter(prefix="/parts", tags=["parts"])
 # Type alias for database dependency
 DB = Annotated[AsyncSession, Depends(get_db)]
 
-# Redis Configuration - Menggunakan 127.0.0.1 sesuai snippet terbaru
+# Redis Configuration
 REDIS_URL = "redis://127.0.0.1:6379/0"
-# Explicit type annotation untuk menghindari "unknown type" warning
-redis_client: redis.Redis = redis.Redis.from_url(REDIS_URL, decode_responses=True) # type: ignore
+redis_client: redis.Redis = redis.Redis.from_url(REDIS_URL, decode_responses=True)  # type: ignore
 
-GATEWAY_API_KEY = "your-secret-gateway-key-here"  # Disarankan simpan di environment variable
+GATEWAY_API_KEY = "your-secret-gateway-key-here"
 QUEUE_KEY = "rims:pick_queue"
+
+# Google Sheets sync token (store in environment variables in production)
+GOOGLE_SHEETS_SYNC_TOKEN = "your-google-sheets-sync-token-here"
 
 @router.get("", response_model=PaginatedResponse[PartResponse], dependencies=[Depends(require_permission("parts.view"))])
 async def list_parts(
@@ -87,12 +92,13 @@ async def list_parts(
         limit=limit,
     )
 
+
 @router.post("/pick", response_model=PartResponse)
 async def pick_part(
     payload: PickRequest,
     db: DB,
 ) -> PartResponse:
-    """Memicu proses picking dan memasukkan part ke antrean Redis."""
+    """Trigger picking process and add part to Redis queue."""
     stmt = select(Part).where(
         and_(Part.part_number == payload.part_number, Part.deleted_at.is_(None))
     )
@@ -101,32 +107,34 @@ async def pick_part(
 
     if not part:
         logger.warning(f"Pick attempt for non-existent part: {payload.part_number}")
-        raise HTTPException(status_code=404, detail="Part tidak ditemukan")
+        raise HTTPException(status_code=404, detail="Part not found")
 
-    # Tambahkan ke antrean Redis
-    queue_len = await redis_client.rpush(QUEUE_KEY, part.part_number) # pyright: ignore[reportGeneralTypeIssues, reportUnknownVariableType]
+    # Add to Redis queue
+    queue_len = await redis_client.rpush(QUEUE_KEY, part.part_number)  # pyright: ignore[reportGeneralTypeIssues, reportUnknownVariableType]
     logger.info(f"Part {part.part_number} pushed to queue. Current queue length: {queue_len}")
     
     return PartResponse.model_validate(part)
+
 
 @router.get("/queue/next", response_model=None)
 async def get_next_command(
     x_api_key: str = Header(...)
 ) -> dict[str, str] | Response:
-    """Endpoint untuk Gateway menarik perintah selanjutnya (Atomic Pull)."""
+    """Endpoint for Gateway to pull next command (Atomic Pull)."""
     if x_api_key != GATEWAY_API_KEY:
         logger.warning("Unauthorized access attempt to queue/next")
         raise HTTPException(status_code=401, detail="Invalid API Key")
     
-    # Ambil item dari sisi kiri (FIFO)
-    next_part = await redis_client.lpop(QUEUE_KEY) # type: ignore
+    # Get item from left side (FIFO)
+    next_part = await redis_client.lpop(QUEUE_KEY)  # type: ignore
 
     if not next_part:
-        # Gunakan debug agar log tidak penuh saat tidak ada aktivitas
+        # Use debug so logs don't fill up when there's no activity
         return Response(status_code=204)
 
     logger.info(f"Gateway pulled command: {next_part}")
-    return {"part_number": str(next_part)} # type: ignore
+    return {"part_number": str(next_part)}  # type: ignore
+
 
 @router.get("/{part_id}", response_model=PartResponse, dependencies=[Depends(require_permission("parts.view"))])
 async def get_part(
@@ -144,6 +152,7 @@ async def get_part(
 
     return PartResponse.model_validate(part)
 
+
 @router.post("", response_model=PartResponse, status_code=status.HTTP_201_CREATED, dependencies=[Depends(require_permission("parts.create"))])
 async def create_part(
     request: PartCreate,
@@ -156,6 +165,7 @@ async def create_part(
     await db.commit()
     await db.refresh(part)
     return PartResponse.model_validate(part)
+
 
 @router.put("/{part_id}", response_model=PartResponse, dependencies=[Depends(require_permission("parts.update"))])
 async def update_part(
@@ -180,6 +190,7 @@ async def update_part(
     await db.refresh(part)
     return PartResponse.model_validate(part)
 
+
 @router.delete("/{part_id}", status_code=status.HTTP_204_NO_CONTENT, dependencies=[Depends(require_permission("parts.delete"))])
 async def delete_part(
     part_id: UUID,
@@ -196,6 +207,7 @@ async def delete_part(
 
     part.deleted_at = datetime.now(timezone.utc)
     await db.commit()
+
 
 @router.get("/{part_id}/movements", response_model=PaginatedResponse[PartMovementResponse], dependencies=[Depends(require_permission("parts.view"))])
 async def get_part_movements(
@@ -231,4 +243,92 @@ async def get_part_movements(
         total=total,
         page=page,
         limit=limit,
+    )
+
+
+@router.get("/movements/sync", response_model=MovementSyncResponse)
+async def sync_movements_for_sheets(
+    db: DB,
+    start_date: date = Query(..., description="Start date (YYYY-MM-DD)"),
+    end_date: date = Query(..., description="End date (YYYY-MM-DD)"),
+    part_number: str | None = Query(default=None, description="Filter by part number"),
+    movement_type: str | None = Query(default=None, description="Filter by movement type (IN/OUT)"),
+    token: str = Query(..., description="API token for authentication"),
+) -> MovementSyncResponse:
+    """
+    Special endpoint for Google Sheets sync with simplified authentication.
+    Returns data in exact format needed for spreadsheet: part_number | date | time | type | qty
+    """
+    # Validate token
+    if token != GOOGLE_SHEETS_SYNC_TOKEN:
+        logger.warning(f"Invalid sync token attempt: {token}")
+        raise HTTPException(status_code=401, detail="Invalid sync token")
+    
+    # Build query
+    start_datetime = datetime.combine(start_date, time.min)
+    end_datetime = datetime.combine(end_date, time.max)
+    
+    base_query = (
+        select(PartMovement, Part.part_number)
+        .join(Part, PartMovement.part_id == Part.id)
+        .where(Part.deleted_at.is_(None))
+        .where(PartMovement.created_at >= start_datetime)
+        .where(PartMovement.created_at <= end_datetime)
+    )
+    
+    # Apply additional filters if provided
+    if part_number:
+        base_query = base_query.where(Part.part_number.icontains(part_number))
+    
+    if movement_type:
+        # Note: Your PartMovement model uses 'type' column, not 'movement_type'
+        base_query = base_query.where(PartMovement.type == movement_type.lower())
+    
+    # Order by date/time
+    stmt = (
+        base_query
+        .order_by(PartMovement.created_at.asc())  # Oldest first for chronological order
+    )
+    
+    result = await db.execute(stmt)
+    rows = result.all()
+    
+    # Format data for Google Sheets
+    sync_data: List[MovementSyncItem] = []  # Explicitly type the list
+    for movement, part_num in rows:
+        created_at = movement.created_at
+        
+        # Format date and time
+        date_str = created_at.strftime("%Y-%m-%d")
+        time_str = created_at.strftime("%H:%M:%S")
+        
+        # Format type to uppercase (IN/OUT)
+        movement_type_upper = movement.type.upper()
+        
+        sync_item = MovementSyncItem(
+            part_number=part_num,
+            date=date_str,
+            time=time_str,
+            type=movement_type_upper,
+            qty=movement.qty
+        )
+        sync_data.append(sync_item)
+    
+    return MovementSyncResponse(
+        success=True,
+        data=sync_data,
+        total=len(sync_data)
+    )
+
+
+@router.get("/sync/ping", response_model=PingResponse)
+async def sync_ping(token: str = Query(..., description="API token for authentication")) -> PingResponse:
+    """Simple ping endpoint to test Google Sheets connection."""
+    if token != GOOGLE_SHEETS_SYNC_TOKEN:
+        raise HTTPException(status_code=401, detail="Invalid sync token")
+    
+    return PingResponse(
+        success=True,
+        message="Google Sheets sync API is working",
+        timestamp=datetime.now(timezone.utc).isoformat()
     )

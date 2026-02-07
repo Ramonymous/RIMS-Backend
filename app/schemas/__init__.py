@@ -2,7 +2,7 @@
 
 from datetime import datetime
 from enum import Enum
-from typing import Any, Generic, TypeVar
+from typing import Any, Generic, List, TypeVar
 from uuid import UUID
 
 from pydantic import (
@@ -420,6 +420,26 @@ class PartMovementResponse(BaseModel):
     reference_type: str  # "Receivings" or "Outgoings"
     reference_id: UUID
     created_at: datetime
+
+class PingResponse(BaseModel):
+    success: bool
+    message: str
+    timestamp: str
+
+class MovementSyncItem(BaseModel):
+    """Simplified movement data for Google Sheets sync."""
+    part_number: str
+    date: str  # YYYY-MM-DD format
+    time: str  # HH:MM:SS format
+    type: str  # IN or OUT
+    qty: int
+
+
+class MovementSyncResponse(BaseModel):
+    """Response model for Google Sheets sync."""
+    success: bool = True
+    data: List[MovementSyncItem]
+    total: int
 
 
 # ============================================================================
