@@ -21,9 +21,6 @@ from app.schemas import (
     PickRequest,
     PartUpdate,
     StockStatusFilter,
-    MovementSyncItem,
-    MovementSyncResponse,
-    PingResponse,
 )
 
 # Setup logger
@@ -43,6 +40,34 @@ QUEUE_KEY = "rims:pick_queue"
 
 # Google Sheets sync token (store in environment variables in production)
 GOOGLE_SHEETS_SYNC_TOKEN = "your-google-sheets-sync-token-here"
+
+
+# Custom response models for Google Sheets sync
+from pydantic import BaseModel
+
+
+class MovementSyncItem(BaseModel):
+    """Simplified movement data for Google Sheets sync."""
+    part_number: str
+    date: str  # YYYY-MM-DD format
+    time: str  # HH:MM:SS format
+    type: str  # IN or OUT
+    qty: int
+
+
+class MovementSyncResponse(BaseModel):
+    """Response model for Google Sheets sync."""
+    success: bool = True
+    data: List[MovementSyncItem]
+    total: int
+
+
+class PingResponse(BaseModel):
+    """Response model for ping endpoint."""
+    success: bool
+    message: str
+    timestamp: str
+
 
 @router.get("", response_model=PaginatedResponse[PartResponse], dependencies=[Depends(require_permission("parts.view"))])
 async def list_parts(
@@ -246,6 +271,10 @@ async def get_part_movements(
     )
 
 
+# =============================================
+# GOOGLE SHEETS SYNC ENDPOINTS (SIMPLIFIED FORMAT)
+# =============================================
+
 @router.get("/movements/sync", response_model=MovementSyncResponse)
 async def sync_movements_for_sheets(
     db: DB,
@@ -281,7 +310,6 @@ async def sync_movements_for_sheets(
         base_query = base_query.where(Part.part_number.icontains(part_number))
     
     if movement_type:
-        # Note: Your PartMovement model uses 'type' column, not 'movement_type'
         base_query = base_query.where(PartMovement.type == movement_type.lower())
     
     # Order by date/time
@@ -294,7 +322,7 @@ async def sync_movements_for_sheets(
     rows = result.all()
     
     # Format data for Google Sheets
-    sync_data: List[MovementSyncItem] = []  # Explicitly type the list
+    sync_data: List[MovementSyncItem] = []
     for movement, part_num in rows:
         created_at = movement.created_at
         
