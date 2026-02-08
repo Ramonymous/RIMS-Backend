@@ -3,8 +3,10 @@
 from datetime import datetime, timedelta
 from typing import Annotated
 
+import time
+
 from fastapi import APIRouter, Depends, Query
-from sqlalchemy import and_, func, select
+from sqlalchemy import and_, case, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -26,6 +28,9 @@ from app.schemas import (
 )
 
 router = APIRouter(prefix="/dashboard", tags=["dashboard"])
+
+_DASHBOARD_CACHE_TTL_SECONDS = 10.0
+_dashboard_cache: dict[int, tuple[float, DashboardResponse]] = {}
 
 # Type alias for database dependency
 DB = Annotated[AsyncSession, Depends(get_db)]
@@ -50,6 +55,13 @@ async def get_dashboard(
     - Low stock parts (up to 10)
     - Pending requests (up to 5)
     """
+    cached = _dashboard_cache.get(days)
+    now = time.monotonic()
+    if cached is not None:
+        cached_at, cached_value = cached
+        if now - cached_at <= _DASHBOARD_CACHE_TTL_SECONDS:
+            return cached_value
+
     # Calculate date range for movements
     end_date = datetime.now()
     start_date = end_date - timedelta(days=days)
@@ -57,117 +69,106 @@ async def get_dashboard(
     # =========================================================================
     # PARTS STATISTICS (using SQL aggregation for accuracy)
     # =========================================================================
-    parts_base = select(Part).where(Part.deleted_at.is_(None))
-    
-    # Total parts count
-    total_parts = (await db.execute(
-        select(func.count()).select_from(parts_base.subquery())
-    )).scalar() or 0
-    
-    # Active parts count
-    active_parts = (await db.execute(
-        select(func.count()).select_from(
-            parts_base.where(Part.is_active.is_(True)).subquery()
+    parts_stats_row = (
+        await db.execute(
+            select(
+                func.count(Part.id),
+                func.coalesce(func.sum(case((Part.is_active.is_(True), 1), else_=0)), 0),
+                func.coalesce(func.sum(case((Part.stock > 10, 1), else_=0)), 0),
+                func.coalesce(
+                    func.sum(case((and_(Part.stock > 0, Part.stock <= 10), 1), else_=0)), 0
+                ),
+                func.coalesce(func.sum(case((Part.stock <= 0, 1), else_=0)), 0),
+            ).where(Part.deleted_at.is_(None))
         )
-    )).scalar() or 0
-    
-    # Stock status counts (using SQL CASE for efficiency)
-    in_stock_count = (await db.execute(
-        select(func.count()).select_from(
-            parts_base.where(Part.stock > 10).subquery()
-        )
-    )).scalar() or 0
-    
-    low_stock_count = (await db.execute(
-        select(func.count()).select_from(
-            parts_base.where(and_(Part.stock > 0, Part.stock <= 10)).subquery()
-        )
-    )).scalar() or 0
-    
-    out_of_stock_count = (await db.execute(
-        select(func.count()).select_from(
-            parts_base.where(Part.stock <= 0).subquery()
-        )
-    )).scalar() or 0
+    ).one()
+    total_parts, active_parts, in_stock_count, low_stock_count, out_of_stock_count = (
+        int(parts_stats_row[0] or 0),
+        int(parts_stats_row[1] or 0),
+        int(parts_stats_row[2] or 0),
+        int(parts_stats_row[3] or 0),
+        int(parts_stats_row[4] or 0),
+    )
     
     # =========================================================================
     # RECEIVINGS STATISTICS
     # =========================================================================
-    receivings_base = select(Receiving).where(Receiving.deleted_at.is_(None))
-    
-    total_receivings = (await db.execute(
-        select(func.count()).select_from(receivings_base.subquery())
-    )).scalar() or 0
-    
-    draft_receivings = (await db.execute(
-        select(func.count()).select_from(
-            receivings_base.where(Receiving.status == "draft").subquery()
+    receivings_stats_row = (
+        await db.execute(
+            select(
+                func.count(Receiving.id),
+                func.coalesce(func.sum(case((Receiving.status == "draft", 1), else_=0)), 0),
+                func.coalesce(func.sum(case((Receiving.status == "completed", 1), else_=0)), 0),
+                func.coalesce(
+                    func.sum(
+                        case(
+                            (
+                                and_(Receiving.status == "completed", Receiving.is_gr.is_(False)),
+                                1,
+                            ),
+                            else_=0,
+                        )
+                    ),
+                    0,
+                ),
+            ).where(Receiving.deleted_at.is_(None))
         )
-    )).scalar() or 0
-    
-    completed_receivings = (await db.execute(
-        select(func.count()).select_from(
-            receivings_base.where(Receiving.status == "completed").subquery()
-        )
-    )).scalar() or 0
-    
-    pending_gr_count = (await db.execute(
-        select(func.count()).select_from(
-            receivings_base.where(
-                and_(Receiving.status == "completed", Receiving.is_gr.is_(False))
-            ).subquery()
-        )
-    )).scalar() or 0
+    ).one()
+    total_receivings, draft_receivings, completed_receivings, pending_gr_count = (
+        int(receivings_stats_row[0] or 0),
+        int(receivings_stats_row[1] or 0),
+        int(receivings_stats_row[2] or 0),
+        int(receivings_stats_row[3] or 0),
+    )
     
     # =========================================================================
     # OUTGOINGS STATISTICS
     # =========================================================================
-    outgoings_base = select(Outgoing).where(Outgoing.deleted_at.is_(None))
-    
-    total_outgoings = (await db.execute(
-        select(func.count()).select_from(outgoings_base.subquery())
-    )).scalar() or 0
-    
-    draft_outgoings = (await db.execute(
-        select(func.count()).select_from(
-            outgoings_base.where(Outgoing.status == "draft").subquery()
+    outgoings_stats_row = (
+        await db.execute(
+            select(
+                func.count(Outgoing.id),
+                func.coalesce(func.sum(case((Outgoing.status == "draft", 1), else_=0)), 0),
+                func.coalesce(func.sum(case((Outgoing.status == "completed", 1), else_=0)), 0),
+                func.coalesce(
+                    func.sum(
+                        case(
+                            (
+                                and_(Outgoing.status == "completed", Outgoing.is_gi.is_(False)),
+                                1,
+                            ),
+                            else_=0,
+                        )
+                    ),
+                    0,
+                ),
+            ).where(Outgoing.deleted_at.is_(None))
         )
-    )).scalar() or 0
-    
-    completed_outgoings = (await db.execute(
-        select(func.count()).select_from(
-            outgoings_base.where(Outgoing.status == "completed").subquery()
-        )
-    )).scalar() or 0
-    
-    pending_gi_count = (await db.execute(
-        select(func.count()).select_from(
-            outgoings_base.where(
-                and_(Outgoing.status == "completed", Outgoing.is_gi.is_(False))
-            ).subquery()
-        )
-    )).scalar() or 0
+    ).one()
+    total_outgoings, draft_outgoings, completed_outgoings, pending_gi_count = (
+        int(outgoings_stats_row[0] or 0),
+        int(outgoings_stats_row[1] or 0),
+        int(outgoings_stats_row[2] or 0),
+        int(outgoings_stats_row[3] or 0),
+    )
     
     # =========================================================================
     # REQUESTS STATISTICS
     # =========================================================================
-    requests_base = select(Request).where(Request.deleted_at.is_(None))
-    
-    total_requests = (await db.execute(
-        select(func.count()).select_from(requests_base.subquery())
-    )).scalar() or 0
-    
-    draft_requests = (await db.execute(
-        select(func.count()).select_from(
-            requests_base.where(Request.status == "draft").subquery()
+    requests_stats_row = (
+        await db.execute(
+            select(
+                func.count(Request.id),
+                func.coalesce(func.sum(case((Request.status == "draft", 1), else_=0)), 0),
+                func.coalesce(func.sum(case((Request.status == "completed", 1), else_=0)), 0),
+            ).where(Request.deleted_at.is_(None))
         )
-    )).scalar() or 0
-    
-    completed_requests = (await db.execute(
-        select(func.count()).select_from(
-            requests_base.where(Request.status == "completed").subquery()
-        )
-    )).scalar() or 0
+    ).one()
+    total_requests, draft_requests, completed_requests = (
+        int(requests_stats_row[0] or 0),
+        int(requests_stats_row[1] or 0),
+        int(requests_stats_row[2] or 0),
+    )
     
     # =========================================================================
     # FETCH RECENT ITEMS
@@ -251,7 +252,7 @@ async def get_dashboard(
         ),
     )
     
-    return DashboardResponse(
+    response = DashboardResponse(
         stats=stats,
         recent_receivings=[ReceivingResponse.model_validate(r) for r in recent_receivings],
         recent_outgoings=[OutgoingResponse.model_validate(o) for o in recent_outgoings],
@@ -259,3 +260,6 @@ async def get_dashboard(
         pending_requests=[RequestResponse.model_validate(r) for r in pending_requests],
         recent_movements=[PartMovementResponse.model_validate(m) for m in recent_movements],
     )
+
+    _dashboard_cache[days] = (now, response)
+    return response

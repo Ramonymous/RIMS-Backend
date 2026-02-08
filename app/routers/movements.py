@@ -45,33 +45,38 @@ async def get_movements(
     - **start_date**: Only include movements on or after this date (strict YYYY-MM-DD format)
     - **end_date**: Only include movements on or before this date (strict YYYY-MM-DD format)
     """
-    base_query = select(PartMovement)
+    filters = []
     
     # Apply filters
     if part_id:
-        base_query = base_query.where(PartMovement.part_id == part_id)
+        filters.append(PartMovement.part_id == part_id)
     
     if movement_type:
-        base_query = base_query.where(PartMovement.type == movement_type.value)
+        filters.append(PartMovement.type == movement_type.value)
     
     if reference_type:
-        base_query = base_query.where(PartMovement.reference_type == reference_type.value)
+        filters.append(PartMovement.reference_type == reference_type.value)
     
     if start_date:
         start_dt = datetime.combine(start_date, datetime.min.time())
-        base_query = base_query.where(PartMovement.created_at >= start_dt)
+        filters.append(PartMovement.created_at >= start_dt)
     
     if end_date:
         end_dt = datetime.combine(end_date, datetime.max.time())
-        base_query = base_query.where(PartMovement.created_at <= end_dt)
+        filters.append(PartMovement.created_at <= end_dt)
     
     # Count total
-    count_stmt = select(func.count()).select_from(base_query.subquery())
-    total = (await db.execute(count_stmt)).scalar() or 0
+    count_stmt = select(func.count()).select_from(PartMovement)
+    if filters:
+        count_stmt = count_stmt.where(*filters)
+    total = int((await db.execute(count_stmt)).scalar() or 0)
     
     # Order by most recent first and paginate
     offset = (page - 1) * limit
-    stmt = base_query.order_by(PartMovement.created_at.desc()).offset(offset).limit(limit)
+    stmt = select(PartMovement)
+    if filters:
+        stmt = stmt.where(*filters)
+    stmt = stmt.order_by(PartMovement.created_at.desc()).offset(offset).limit(limit)
     
     result = await db.execute(stmt)
     movements = result.scalars().all()

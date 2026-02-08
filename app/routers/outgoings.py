@@ -42,30 +42,26 @@ async def list_outgoings(
     status_filter options: draft, completed, cancelled
     pending_gi=true to get outgoings awaiting GI confirmation
     """
-    base_query = (
-        select(Outgoing)
-        .where(Outgoing.deleted_at.is_(None))
-    )
+    filters = [Outgoing.deleted_at.is_(None)]
 
     if status_filter:
-        base_query = base_query.where(Outgoing.status == status_filter.value)
+        filters.append(Outgoing.status == status_filter.value)
 
     if pending_gi:
-        base_query = base_query.where(
-            and_(Outgoing.status == DocumentStatus.COMPLETED.value, Outgoing.is_gi.is_(False))
-        )
+        filters.append(and_(Outgoing.status == DocumentStatus.COMPLETED.value, Outgoing.is_gi.is_(False)))
 
     if doc_number:
-        base_query = base_query.where(Outgoing.doc_number.icontains(doc_number))
+        filters.append(Outgoing.doc_number.icontains(doc_number))
 
     # Count total
-    count_stmt = select(func.count()).select_from(base_query.subquery())
-    total = (await db.execute(count_stmt)).scalar() or 0
+    count_stmt = select(func.count()).select_from(Outgoing).where(*filters)
+    total = int((await db.execute(count_stmt)).scalar() or 0)
 
     # Fetch page with eager loading
     offset = (page - 1) * limit
     stmt = (
-        base_query
+        select(Outgoing)
+        .where(*filters)
         .options(selectinload(Outgoing.items))
         .order_by(Outgoing.created_at.desc())
         .offset(offset)

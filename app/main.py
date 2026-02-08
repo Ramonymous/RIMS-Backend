@@ -2,16 +2,18 @@
 
 import logging
 import sys
+import time
 from contextlib import asynccontextmanager
-from typing import Any, AsyncGenerator
+from typing import Any, AsyncGenerator, Awaitable, Callable
 from ipaddress import ip_address, ip_network
 
-from fastapi import FastAPI, Request, status
+from fastapi import FastAPI, Request, Response, status
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import JSONResponse, ORJSONResponse
+
 from sqlalchemy import text
 
 from app.core.config import settings
@@ -170,86 +172,75 @@ if settings.rate_limit_enabled:
         ),
     )
 
-
-# ============================================================================
-# CUSTOM MIDDLEWARE
-# ============================================================================
-
-from fastapi import Response
-
-from typing import Callable, Awaitable
-
+# 5. Cloudflare/IP extraction middleware
 @app.middleware("http")
 async def cloudflare_middleware(
-    request: Request, 
-    call_next: Callable[[Request], Awaitable[Response]]
+    request: Request,
+    call_next: Callable[[Request], Awaitable[Response]],
 ) -> Response:
     """
     Extract real client IP and Cloudflare metadata.
     Validate requests are from Cloudflare in production.
     """
-    # Get client IP from proxy
     proxy_ip = request.client.host if request.client else "unknown"
-    
-    # Validate Cloudflare IP in production
+
     if settings.should_validate_cloudflare and proxy_ip != "unknown":
         if not is_cloudflare_ip(proxy_ip):
             logger.warning(
                 f"??  Request NOT from Cloudflare: {proxy_ip} "
                 f"(Host: {request.headers.get('host', 'unknown')})"
             )
-            # In strict mode, you can block non-Cloudflare requests
-            # return JSONResponse(
-            #     status_code=403,
-            #     content={"detail": "Direct access forbidden"}
-            # )
-    
-    # Extract real client IP from Cloudflare headers
-    # Priority: CF-Connecting-IP > X-Real-IP > X-Forwarded-For > client IP
+
     cf_connecting_ip = request.headers.get("CF-Connecting-IP")
     x_real_ip = request.headers.get("X-Real-IP")
     x_forwarded_for = request.headers.get("X-Forwarded-For", "").split(",")[0].strip()
-    
-    real_ip = (
-        cf_connecting_ip
-        or x_real_ip
-        or x_forwarded_for
-        or proxy_ip
-    )
-    
-    # Extract Cloudflare metadata
+
+    real_ip = cf_connecting_ip or x_real_ip or x_forwarded_for or proxy_ip
+
     cf_ray = request.headers.get("CF-Ray", "N/A")
     cf_country = request.headers.get("CF-IPCountry", "Unknown")
     cf_visitor = request.headers.get("CF-Visitor", "{}")
-    
-    # Attach to request state for easy access
+
     request.state.real_ip = real_ip
     request.state.proxy_ip = proxy_ip
     request.state.cf_ray = cf_ray
     request.state.cf_country = cf_country
     request.state.cf_visitor = cf_visitor
     request.state.is_cloudflare = bool(cf_connecting_ip)
-    
-    # Log request in debug mode
+
     if settings.debug:
         logger.debug(
             f"Request: {request.method} {request.url.path} | "
             f"Real IP: {real_ip} | Country: {cf_country} | "
             f"CF-Ray: {cf_ray}"
         )
-    
+
     response = await call_next(request)
-    
-    # Add custom headers to response
+
     response.headers["X-Environment"] = settings.environment
     response.headers["X-API-Version"] = settings.app_version
-    
+
     return response
 
+# 6. Request Timing Middleware (Log slow requests)
+@app.middleware("http")
+async def request_timing_middleware(
+    request: Request,
+    call_next: Callable[[Request], Awaitable[Response]],
+) -> Response:
+    start = time.perf_counter()
+    response = await call_next(request)
+    elapsed_ms = (time.perf_counter() - start) * 1000.0
+    if elapsed_ms >= 500.0 or settings.debug:
+        logger.info(
+            "%s %s -> %s (%.1fms)",
+            request.method,
+            request.url.path,
+            response.status_code,
+            elapsed_ms,
+        )
+    return response
 
-# ============================================================================
-# EXCEPTION HANDLERS
-# ============================================================================
 
 @app.exception_handler(RequestValidationError)
 async def validation_exception_handler(

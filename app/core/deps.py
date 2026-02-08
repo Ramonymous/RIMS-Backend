@@ -1,5 +1,6 @@
 """FastAPI dependencies for authentication and authorization."""
 
+import time
 from typing import Annotated
 from uuid import UUID
 
@@ -14,6 +15,9 @@ from app.models import User
 
 # HTTP Bearer token scheme
 bearer_scheme = HTTPBearer(auto_error=True)
+
+_CURRENT_USER_CACHE_TTL_SECONDS = 10.0
+_current_user_cache: dict[UUID, tuple[float, User]] = {}
 
 
 async def get_current_user(
@@ -44,6 +48,13 @@ async def get_current_user(
             headers={"WWW-Authenticate": "Bearer"},
         )
     
+    cached = _current_user_cache.get(user_uuid)
+    now = time.monotonic()
+    if cached is not None:
+        cached_at, cached_user = cached
+        if now - cached_at <= _CURRENT_USER_CACHE_TTL_SECONDS:
+            return cached_user
+
     stmt = select(User).where(User.id == user_uuid)
     result = await db.execute(stmt)
     user = result.scalar_one_or_none()
@@ -55,6 +66,7 @@ async def get_current_user(
             headers={"WWW-Authenticate": "Bearer"},
         )
     
+    _current_user_cache[user_uuid] = (now, user)
     return user
 
 

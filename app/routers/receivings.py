@@ -42,30 +42,26 @@ async def list_receivings(
     status_filter options: draft, completed, cancelled
     pending_gr=true to get receivings awaiting GR confirmation
     """
-    base_query = (
-        select(Receiving)
-        .where(Receiving.deleted_at.is_(None))
-    )
+    filters = [Receiving.deleted_at.is_(None)]
 
     if status_filter:
-        base_query = base_query.where(Receiving.status == status_filter.value)
+        filters.append(Receiving.status == status_filter.value)
 
     if pending_gr:
-        base_query = base_query.where(
-            and_(Receiving.status == DocumentStatus.COMPLETED.value, Receiving.is_gr.is_(False))
-        )
+        filters.append(and_(Receiving.status == DocumentStatus.COMPLETED.value, Receiving.is_gr.is_(False)))
 
     if doc_number:
-        base_query = base_query.where(Receiving.doc_number.icontains(doc_number))
+        filters.append(Receiving.doc_number.icontains(doc_number))
 
     # Count total
-    count_stmt = select(func.count()).select_from(base_query.subquery())
-    total = (await db.execute(count_stmt)).scalar() or 0
+    count_stmt = select(func.count()).select_from(Receiving).where(*filters)
+    total = int((await db.execute(count_stmt)).scalar() or 0)
 
     # Fetch page with eager loading
     offset = (page - 1) * limit
     stmt = (
-        base_query
+        select(Receiving)
+        .where(*filters)
         .options(selectinload(Receiving.items))
         .order_by(Receiving.created_at.desc())
         .offset(offset)

@@ -96,18 +96,32 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         
         client_ip = get_client_ip(request)
         
-        # Stricter rate limiting for auth endpoints
+        # Stricter rate limiting for auth endpoints (per-minute)
         if path.startswith("/auth"):
-            key = f"auth:{client_ip}"
-            max_requests = self.config.auth_requests_per_minute
-            window = 60.0
+            key_prefix = f"auth:{client_ip}"
+            max_per_minute = self.config.auth_requests_per_minute
         else:
-            key = f"api:{client_ip}"
-            max_requests = self.config.requests_per_minute
-            window = 60.0
-        
-        if not rate_limiter.is_allowed(key, max_requests, window):
-            retry_after = rate_limiter.get_retry_after(key, window)
+            key_prefix = f"api:{client_ip}"
+            max_per_minute = self.config.requests_per_minute
+
+        # Enforce per-second and per-minute limits.
+        # Note: we reuse requests_per_second for both auth and non-auth to avoid
+        # expanding the config surface area.
+        per_second_key = f"{key_prefix}:sec"
+        if not rate_limiter.is_allowed(per_second_key, self.config.requests_per_second, 1.0):
+            retry_after = rate_limiter.get_retry_after(per_second_key, 1.0)
+            return JSONResponse(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                content={
+                    "detail": "Rate limit exceeded",
+                    "retry_after": retry_after,
+                },
+                headers={"Retry-After": str(retry_after)},
+            )
+
+        per_minute_key = f"{key_prefix}:min"
+        if not rate_limiter.is_allowed(per_minute_key, max_per_minute, 60.0):
+            retry_after = rate_limiter.get_retry_after(per_minute_key, 60.0)
             return JSONResponse(
                 status_code=status.HTTP_429_TOO_MANY_REQUESTS,
                 content={

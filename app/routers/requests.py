@@ -58,20 +58,14 @@ async def pick_request_item(
 
     item_id = body.item_id
     # Find the request item with part information
-    stmt = (
-        select(RequestList)
-        .where(RequestList.id == item_id)
-    )
+    stmt = select(RequestList).where(RequestList.id == item_id).options(selectinload(RequestList.part))
     result = await db.execute(stmt)
     item = result.scalar_one_or_none()
     
     if not item:
         raise HTTPException(status_code=404, detail="Request item not found")
 
-    # Fetch part details
-    part_stmt = select(Part).where(Part.id == item.part_id)
-    part_result = await db.execute(part_stmt)
-    part = part_result.scalar_one_or_none()
+    part = item.part
 
     # Compose response with part details
     item_dict = item.__dict__.copy()
@@ -105,22 +99,23 @@ async def list_requests(
     if not current_user.has_permission("requests.view"):
         raise HTTPException(status_code=403, detail="Permission denied: requests.view")
     
-    base_query = select(Request).where(Request.deleted_at.is_(None))
+    filters = [Request.deleted_at.is_(None)]
 
     if status_filter:
-        base_query = base_query.where(Request.status == status_filter.value)
+        filters.append(Request.status == status_filter.value)
 
     if request_number:
-        base_query = base_query.where(Request.request_number.icontains(request_number))
+        filters.append(Request.request_number.icontains(request_number))
 
     # Count total
-    count_stmt = select(func.count()).select_from(base_query.subquery())
-    total = (await db.execute(count_stmt)).scalar() or 0
+    count_stmt = select(func.count()).select_from(Request).where(*filters)
+    total = int((await db.execute(count_stmt)).scalar() or 0)
 
     # Fetch page with eager loading
     offset = (page - 1) * limit
     stmt = (
-        base_query
+        select(Request)
+        .where(*filters)
         .options(selectinload(Request.items), selectinload(Request.requested_by_user))
         .order_by(Request.created_at.desc())
         .offset(offset)
@@ -403,8 +398,8 @@ async def supply_request_item(
     if not current_user.has_permission("requests.supply"):
         raise HTTPException(status_code=403, detail="Permission denied: requests.supply")
 
-    # Find the item
-    stmt = select(RequestList).where(RequestList.id == item_id)
+    # Find the item (eager load part for later broadcast)
+    stmt = select(RequestList).where(RequestList.id == item_id).options(selectinload(RequestList.part))
     result = await db.execute(stmt)
     item = result.scalar_one_or_none()
 
@@ -438,23 +433,22 @@ async def supply_request_item(
 
     # --- Outgoing logic ---
     outgoing_stmt = select(Outgoing).where(
-        and_(Outgoing.notes == str(item.request_id), Outgoing.status == "draft")
+        and_(Outgoing.notes == str(item.request_id), Outgoing.status == "completed")
     )
     outgoing_result = await db.execute(outgoing_stmt)
     outgoing = outgoing_result.scalar_one_or_none()
 
     if not outgoing:
         today = datetime.now().strftime('%d%m%y')
-        last_out_stmt = select(Outgoing).where(
+        last_doc_stmt = select(func.max(Outgoing.doc_number)).where(
             Outgoing.doc_number.like(f"OUT-{today}-%")
-        ).order_by(Outgoing.doc_number.desc())
-        last_out_result = await db.execute(last_out_stmt)
-        last_out = last_out_result.scalars().first()
-        
+        )
+        last_doc = (await db.execute(last_doc_stmt)).scalar_one_or_none()
+
         last_seq = 0
-        if last_out and last_out.doc_number:
+        if last_doc:
             try:
-                last_seq = int(last_out.doc_number.split('-')[-1])
+                last_seq = int(str(last_doc).split('-')[-1])
             except (ValueError, IndexError):
                 last_seq = 0
         
