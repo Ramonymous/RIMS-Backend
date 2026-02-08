@@ -1,8 +1,8 @@
-"""Initial schema with proper UUID types
+"""initial
 
-Revision ID: 38515e019bc5
+Revision ID: 0c65a05f3208
 Revises: 
-Create Date: 2026-02-01 21:27:58.842213
+Create Date: 2026-02-08 13:37:52.381681
 
 """
 from typing import Sequence, Union
@@ -12,7 +12,7 @@ import sqlalchemy as sa
 from sqlalchemy.dialects import postgresql
 
 # revision identifiers, used by Alembic.
-revision: str = '38515e019bc5'
+revision: str = '0c65a05f3208'
 down_revision: Union[str, Sequence[str], None] = None
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
@@ -38,11 +38,15 @@ def upgrade() -> None:
     sa.Column('updated_at', sa.DateTime(), nullable=False),
     sa.PrimaryKeyConstraint('id')
     )
+    op.create_index('ix_parts_deleted_at', 'parts', ['deleted_at'], unique=False)
+    op.create_index('ix_parts_is_active', 'parts', ['is_active'], unique=False)
+    op.create_index('ix_parts_part_number', 'parts', ['part_number'], unique=False)
     op.create_table('users',
     sa.Column('id', sa.UUID(), nullable=False),
     sa.Column('name', sa.String(length=255), nullable=False),
     sa.Column('email', sa.String(length=255), nullable=False),
     sa.Column('password', sa.String(length=255), nullable=False),
+    sa.Column('role', sa.String(length=50), nullable=False),
     sa.Column('permissions', postgresql.JSON(astext_type=sa.Text()), nullable=False),
     sa.Column('two_factor_secret', sa.String(length=255), nullable=True),
     sa.Column('two_factor_recovery_codes', sa.Text(), nullable=True),
@@ -69,6 +73,9 @@ def upgrade() -> None:
     sa.PrimaryKeyConstraint('id'),
     sa.UniqueConstraint('doc_number')
     )
+    op.create_index('ix_outgoings_deleted_at', 'outgoings', ['deleted_at'], unique=False)
+    op.create_index('ix_outgoings_doc_number', 'outgoings', ['doc_number'], unique=False)
+    op.create_index('ix_outgoings_status', 'outgoings', ['status'], unique=False)
     op.create_table('part_movements',
     sa.Column('id', sa.UUID(), nullable=False),
     sa.Column('part_id', sa.UUID(), nullable=False),
@@ -82,6 +89,9 @@ def upgrade() -> None:
     sa.ForeignKeyConstraint(['part_id'], ['parts.id'], ),
     sa.PrimaryKeyConstraint('id')
     )
+    op.create_index('ix_part_movements_created_at', 'part_movements', ['created_at'], unique=False)
+    op.create_index('ix_part_movements_part_id', 'part_movements', ['part_id'], unique=False)
+    op.create_index('ix_part_movements_reference', 'part_movements', ['reference_type', 'reference_id'], unique=False)
     op.create_table('receivings',
     sa.Column('id', sa.UUID(), nullable=False),
     sa.Column('doc_number', sa.String(length=255), nullable=False),
@@ -97,6 +107,9 @@ def upgrade() -> None:
     sa.PrimaryKeyConstraint('id'),
     sa.UniqueConstraint('doc_number')
     )
+    op.create_index('ix_receivings_deleted_at', 'receivings', ['deleted_at'], unique=False)
+    op.create_index('ix_receivings_doc_number', 'receivings', ['doc_number'], unique=False)
+    op.create_index('ix_receivings_status', 'receivings', ['status'], unique=False)
     op.create_table('requests',
     sa.Column('id', sa.UUID(), nullable=False),
     sa.Column('request_number', sa.String(length=255), nullable=False),
@@ -112,6 +125,9 @@ def upgrade() -> None:
     sa.PrimaryKeyConstraint('id'),
     sa.UniqueConstraint('request_number')
     )
+    op.create_index('ix_requests_deleted_at', 'requests', ['deleted_at'], unique=False)
+    op.create_index('ix_requests_request_number', 'requests', ['request_number'], unique=False)
+    op.create_index('ix_requests_status', 'requests', ['status'], unique=False)
     op.create_table('outgoing_items',
     sa.Column('id', sa.UUID(), nullable=False),
     sa.Column('outgoing_id', sa.UUID(), nullable=False),
@@ -156,10 +172,25 @@ def downgrade() -> None:
     op.drop_table('request_lists')
     op.drop_table('receiving_items')
     op.drop_table('outgoing_items')
+    op.drop_index('ix_requests_status', table_name='requests')
+    op.drop_index('ix_requests_request_number', table_name='requests')
+    op.drop_index('ix_requests_deleted_at', table_name='requests')
     op.drop_table('requests')
+    op.drop_index('ix_receivings_status', table_name='receivings')
+    op.drop_index('ix_receivings_doc_number', table_name='receivings')
+    op.drop_index('ix_receivings_deleted_at', table_name='receivings')
     op.drop_table('receivings')
+    op.drop_index('ix_part_movements_reference', table_name='part_movements')
+    op.drop_index('ix_part_movements_part_id', table_name='part_movements')
+    op.drop_index('ix_part_movements_created_at', table_name='part_movements')
     op.drop_table('part_movements')
+    op.drop_index('ix_outgoings_status', table_name='outgoings')
+    op.drop_index('ix_outgoings_doc_number', table_name='outgoings')
+    op.drop_index('ix_outgoings_deleted_at', table_name='outgoings')
     op.drop_table('outgoings')
     op.drop_table('users')
+    op.drop_index('ix_parts_part_number', table_name='parts')
+    op.drop_index('ix_parts_is_active', table_name='parts')
+    op.drop_index('ix_parts_deleted_at', table_name='parts')
     op.drop_table('parts')
     # ### end Alembic commands ###

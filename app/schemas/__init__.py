@@ -2,7 +2,7 @@
 
 from datetime import datetime
 from enum import Enum
-from typing import Any, Generic, List, TypeVar
+from typing import Any, Generic, List, TypeVar, Literal
 from uuid import UUID
 
 from pydantic import (
@@ -104,11 +104,15 @@ class PaginatedResponse(BaseModel, Generic[T]):
 # ============================================================================
 
 
+UserRole = Literal["admin", "inventory", "delivery"]
+
+
 class UserCreate(BaseModel):
     """Schema for creating a user."""
     name: str = Field(..., min_length=1, max_length=255)
     email: EmailStr
     password: str = Field(..., min_length=8, max_length=255)
+    role: UserRole = "inventory"
     permissions: list[str] = Field(default_factory=list)
 
 
@@ -116,6 +120,7 @@ class UserUpdate(BaseModel):
     """Schema for updating a user."""
     name: str | None = Field(default=None, min_length=1, max_length=255)
     email: EmailStr | None = None
+    role: UserRole | None = None
     permissions: list[str] | None = None
 
 
@@ -126,6 +131,7 @@ class UserResponse(BaseModel):
     id: UUID
     name: str
     email: str
+    role: UserRole
     permissions: list[str]
     email_verified_at: datetime | None = None
     created_at: datetime

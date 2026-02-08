@@ -386,6 +386,18 @@ async def create_database(db_config: DatabaseConfig) -> bool:
 
         if exists:
             print_info(f"Database '{db_config.database}' already exists")
+            reset = get_input("Reset database (DROP & RECREATE)? (yes/no)", "no").lower()
+            if reset in ("yes", "y"):
+                try:
+                    await conn.execute(
+                        "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = $1 AND pid <> pg_backend_pid()",
+                        db_config.database,
+                    )
+                except Exception:
+                    pass
+                await conn.execute(f'DROP DATABASE IF EXISTS "{db_config.database}"')
+                await conn.execute(f'CREATE DATABASE "{db_config.database}"')
+                print_success(f"Database '{db_config.database}' reset successfully!")
         else:
             # Create database (safe identifier escaping)
             await conn.execute(f'CREATE DATABASE "{db_config.database}"')
@@ -567,6 +579,7 @@ async def create_admin_user() -> bool:
                 name=name,
                 email=email,
                 password=hash_password(password),
+                role="admin",
                 permissions=admin_permissions,
             )
 

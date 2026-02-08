@@ -41,6 +41,7 @@ FastAPI backend for the **R**eal-time **I**nventory **M**anagement **S**ystem (R
    - Creating .env configuration
    - Verifying PostgreSQL connection
    - Creating the database
+   - (Optional) Resetting the database (DROP & RECREATE)
    - Running migrations
    - Creating an admin user
 
@@ -51,6 +52,37 @@ FastAPI backend for the **R**eal-time **I**nventory **M**anagement **S**ystem (R
 
 The API will be available at `http://localhost:8000`
 
+## API Base Paths
+
+All application APIs are versioned and namespaced under `/v1`:
+
+### Shared (global)
+
+- `POST /v1/auth/login`
+- `POST /v1/auth/refresh`
+- `GET /v1/users`
+- `GET /v1/users/me`
+
+### Inventory
+
+All inventory endpoints are under:
+
+- `/v1/inventory/*`
+
+Examples:
+
+- `GET /v1/inventory/dashboard`
+- `GET /v1/inventory/parts`
+- `GET /v1/inventory/movements`
+- `GET /v1/inventory/receivings`
+- `GET /v1/inventory/outgoings`
+- `GET /v1/inventory/requests`
+- `GET /v1/inventory/events/stream`
+
+### Delivery
+
+- `/v1/delivery/*` (placeholder for now)
+
 ### API Documentation
 - Swagger UI: `http://localhost:8000/docs`
 - ReDoc: `http://localhost:8000/redoc`
@@ -60,22 +92,37 @@ The API will be available at `http://localhost:8000`
 ```
 app/
 ├── main.py                    # FastAPI application entry point with optimized startup/shutdown
+├── api/                        # Versioned API modules
+│   └── v1/
+│       ├── shared/             # Shared APIs (auth, users)
+│       ├── inventory/          # Inventory APIs
+│       └── delivery/           # Delivery APIs (placeholder)
 ├── core/                      # Core infrastructure
 │   ├── config.py              # Environment settings and configuration management
 │   ├── database.py            # Database connection and session management
 │   └── security.py            # Password hashing and JWT token utilities
 ├── models/                    # SQLAlchemy ORM models
 │   └── __init__.py            # User, Part, Receiving, Outgoing, Request, etc.
+│   ├── shared.py              # Shared model exports (organizational)
+│   ├── inventory.py           # Inventory model exports (organizational)
+│   └── delivery.py            # Delivery model exports (placeholder)
 ├── schemas/                   # Pydantic request/response schemas
 │   └── __init__.py            # Validation schemas for all resources
-└── routers/                   # API route handlers
-    ├── auth.py                # Authentication endpoints
-    ├── users.py               # User management
-    ├── parts.py               # Parts inventory
-    ├── receivings.py          # Incoming goods receipts
-    ├── outgoings.py           # Outgoing goods issues
-    └── requests.py            # Parts requests
+│   ├── shared.py              # Shared schema exports (organizational)
+│   ├── inventory.py           # Inventory schema exports (organizational)
+│   └── delivery.py            # Delivery schema exports (placeholder)
+└── routers/                   # Compatibility re-exports (legacy imports)
 ```
+
+## Roles
+
+Users have a `role` field used by the frontend for routing and UI:
+
+- `admin`
+- `inventory`
+- `delivery`
+
+If you use `install.py` to create the bootstrap admin user, it will be created with `role="admin"`.
 
 ## Application Features
 
@@ -334,34 +381,15 @@ curl https://api.rims.r-dev.asia/docs
 
 ### 9. Create Admin User
 
+Use the installation wizard (recommended):
+
 ```bash
 cd /var/www/rims-backend
 source venv/bin/activate
-python -c "
-import asyncio
-from app.core.database import async_session
-from app.models import User
-from app.core.security import get_password_hash
-
-async def create_admin():
-    async with async_session() as session:
-        admin = User(
-            name='Admin',
-            email='admin@rims.r-dev.asia',
-            hashed_password=get_password_hash('your_admin_password'),
-            permissions=['admin', 'users.create', 'users.update', 'users.delete',
-                         'parts.create', 'parts.update', 'parts.delete',
-                         'receivings.create', 'receivings.update', 'receivings.delete',
-                         'outgoings.create', 'outgoings.update', 'outgoings.delete',
-                         'requests.create', 'requests.update', 'requests.delete']
-        )
-        session.add(admin)
-        await session.commit()
-        print('Admin user created!')
-
-asyncio.run(create_admin())
-"
+python install.py
 ```
+
+It will prompt you to create an admin user and will set `role="admin"`.
 
 ### Environment Variables Reference
 

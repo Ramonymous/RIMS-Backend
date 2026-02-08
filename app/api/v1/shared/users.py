@@ -89,6 +89,7 @@ async def create_user(request: UserCreate, db: DB) -> UserResponse:
         name=request.name,
         email=request.email,
         password=hash_password(request.password),
+        role=request.role,
         permissions=request.permissions,
     )
     db.add(user)
@@ -128,6 +129,8 @@ async def update_user(
 
     if request.name is not None:
         user.name = request.name
+    if request.role is not None:
+        user.role = request.role
     if request.permissions is not None:
         user.permissions = request.permissions
 

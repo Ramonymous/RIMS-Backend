@@ -7,7 +7,7 @@ from contextlib import asynccontextmanager
 from typing import Any, AsyncGenerator, Awaitable, Callable
 from ipaddress import ip_address, ip_network
 
-from fastapi import FastAPI, Request, Response, status
+from fastapi import APIRouter, FastAPI, Request, Response, status
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
@@ -19,8 +19,8 @@ from sqlalchemy import text
 from app.core.config import settings
 from app.core.database import engine
 from app.core.ratelimit import RateLimitMiddleware, RateLimitConfig
-from app.routers import (
-    auth,
+from app.api.v1.shared import auth, users
+from app.api.v1.inventory import (
     dashboard,
     events,
     movements,
@@ -28,7 +28,6 @@ from app.routers import (
     parts,
     receivings,
     requests,
-    users,
 )
 
 # Cloudflare IP Ranges (for validation in production)
@@ -284,15 +283,29 @@ async def general_exception_handler(
 # ROUTERS
 # ============================================================================
 
-app.include_router(auth.router)
-app.include_router(dashboard.router)
-app.include_router(users.router)
-app.include_router(parts.router)
-app.include_router(movements.router)
-app.include_router(receivings.router)
-app.include_router(outgoings.router)
-app.include_router(requests.router)
-app.include_router(events.router)
+api_v1 = APIRouter(prefix="/v1")
+
+# Global (shared across apps)
+api_v1.include_router(auth.router)
+api_v1.include_router(users.router)
+
+# Inventory app
+inventory_api = APIRouter(prefix="/inventory")
+inventory_api.include_router(dashboard.router)
+inventory_api.include_router(parts.router)
+inventory_api.include_router(movements.router)
+inventory_api.include_router(receivings.router)
+inventory_api.include_router(outgoings.router)
+inventory_api.include_router(requests.router)
+inventory_api.include_router(events.router)
+
+# Delivery app (placeholder for now)
+delivery_api = APIRouter(prefix="/delivery")
+
+api_v1.include_router(inventory_api)
+api_v1.include_router(delivery_api)
+
+app.include_router(api_v1)
 
 
 # ============================================================================
